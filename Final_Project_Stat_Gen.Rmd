@@ -6,7 +6,12 @@ output: pdf_document
 ```{r setup, include=FALSE}
 library(TCGAbiolinks)
 library(tidyverse)
+library(SummarizedExperiment)
+library(DescTools)
 ```
+
+
+## Data Download, Cleaning, and Processing:
 
 ```{r}
 query_meth.hg19 <- GDCquery(project= "TCGA-KIRC",
@@ -16,12 +21,47 @@ query_meth.hg19 <- GDCquery(project= "TCGA-KIRC",
 GDCdownload(query_meth.hg19)
 data.hg19 <- GDCprepare(query_meth.hg19)
 
-meth_data = data.frame(assay(data.hg19))%>%
-  pivot_longer(1:485,names_to = "Sample_ID",values_to = "Methylation")%>%
-  arrange(Sample_ID)%>%
-  mutate(CpG_Sites = rep(data.hg19@rowRanges@ranges@NAMES,485))
+meth_data = data.frame(assay(data.hg19))
 
-sample = data.frame(data.hg19$sample_type,data.hg19$sample_id)
+sample = data.frame(data.hg19$sample_type,data.hg19$barcode)
 
 colnames(sample) = c("Group","Sample_ID")
+
+sample$Group = recode(sample$Group, "Additional - New Primary" = "Primary Tumor")
+
+Case = filter(sample, Group == "Primary Tumor")
+
+Case$Sample_ID = gsub("-",".",Case$Sample_ID)
+
+Control = filter(sample, Group == "Solid Tissue Normal")
+
+Control$Sample_ID = gsub("-",".",Control$Sample_ID)
+
+Case_Meth_Data = dplyr::select(meth_data,tidyselect::contains(Case$Sample_ID))
+
+Control_Meth_Data = dplyr::select(meth_data,tidyselect::contains(Control$Sample_ID))
+
+Case_Meth_Data = t(Case_Meth_Data)
+
+Control_Meth_Data = t(Control_Meth_Data)
 ```
+
+## Paired T-Tests:
+
+```{r}
+
+```
+
+## Logistic Regression:
+
+```{r}
+
+```
+
+## Results:
+
+```{r}
+
+```
+
+## Discussion and Conclusions:
