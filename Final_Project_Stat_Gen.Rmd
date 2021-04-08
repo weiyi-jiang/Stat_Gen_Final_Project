@@ -41,15 +41,38 @@ Case_Meth_Data = dplyr::select(meth_data,tidyselect::contains(Case$Sample_ID))
 
 Control_Meth_Data = dplyr::select(meth_data,tidyselect::contains(Control$Sample_ID))
 
-Case_Meth_Data = t(Case_Meth_Data)
+Case_Meth_Data = data.frame(t(Case_Meth_Data))
 
-Control_Meth_Data = t(Control_Meth_Data)
+Control_Meth_Data = data.frame(t(Control_Meth_Data))
+
+Case_Meth_Data = Case_Meth_Data[, colSums(is.na(Case_Meth_Data)) != nrow(Case_Meth_Data)]
+
+Control_Meth_Data = Control_Meth_Data[, colSums(is.na(Control_Meth_Data)) != nrow(Control_Meth_Data)]
+
+table(colnames(Case_Meth_Data)==colnames(Control_Meth_Data)) #check if CpG sites are same
 ```
 
-## Paired T-Tests:
+## Two Sample T-Tests:
 
 ```{r}
+#Two Sample T tests for Cases and Controls for Each CpG Site:
 
+t_test_res = data.frame()
+
+for (j in seq(1,ncol(Case_Meth_Data))){
+    t_test_res_temp = t.test(Case_Meth_Data[[j]],Control_Meth_Data[[j]],alternative="two.sided")%>%
+      broom::tidy()
+    t_test_res = rbind(t_test_res,t_test_res_temp) 
+}
+
+t_test_res$CpG_Site = colnames(Case_Meth_Data)
+
+t_test_res = dplyr::select(t_test_res,c("CpG_Site","p.value"))
+
+## FDR Correction:
+
+t_test_res_FDR = t_test_res%>%
+  mutate(FDR_P_Value = p.adjust())
 ```
 
 ## Logistic Regression:
