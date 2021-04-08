@@ -8,6 +8,7 @@ library(TCGAbiolinks)
 library(tidyverse)
 library(SummarizedExperiment)
 library(DescTools)
+library(qqman)
 ```
 
 
@@ -72,7 +73,7 @@ t_test_res = dplyr::select(t_test_res,c("CpG_Site","p.value"))
 ## FDR Correction:
 
 t_test_res_FDR = t_test_res%>%
-  mutate(FDR_P_Value = p.adjust())
+  mutate(FDR_P_Value = p.adjust(t_test_res$p.value,method="fdr"))
 ```
 
 ## Logistic Regression:
@@ -84,7 +85,55 @@ t_test_res_FDR = t_test_res%>%
 ## Results:
 
 ```{r}
+## Number of Methylation Sites with Significant Difference between Case and Controls:
 
+table(t_test_res_FDR$FDR_P_Value<0.05)
+
+## Manhattan Plot of FDR Corrected P-Values from T Test:
+
+chrom_info = data.frame(rowRanges(data.hg19))%>%
+  dplyr::select("seqnames","start","probeID")
+
+t_test_FDR_w_chrom = merge(t_test_res_FDR,chrom_info,by.x="CpG_Site",by.y="probeID")
+
+colnames(t_test_FDR_w_chrom) = c("CpG_Site","p.value","FDR_P_Value",
+                                 "chrom","pos")
+
+t_test_FDR_w_chrom$FDR_P_Value = -log10(t_test_FDR_w_chrom$FDR_P_Value)
+
+t_test_FDR_w_chrom$chrom = gsub("chr","",t_test_FDR_w_chrom$chrom)
+
+t_test_FDR_w_chrom$chrom = recode(t_test_FDR_w_chrom$chrom,"X" = "23","Y"="24","NA"="25")
+
+t_test_FDR_w_chrom$chrom = as.numeric(t_test_FDR_w_chrom$chrom)
+
+plot <- t_test_FDR_w_chrom %>% 
+  group_by(chrom) %>% 
+  summarise(chr_len=max(pos)) %>% 
+  mutate(tot=cumsum(as.numeric(chr_len))-chr_len) %>%
+  dplyr::select(-chr_len) %>%
+  left_join(t_test_FDR_w_chrom, ., by=c("chrom"="chrom")) %>%
+  arrange(chrom,pos) %>%
+  mutate(pos_cum=pos+tot)
+
+axisdf = plot %>% group_by(chrom) %>% summarize(center=( max(pos_cum) + min(pos_cum) ) / 2 )
+
+axisdf$chrom = c(seq(1,22),"X","Y","NA")
+
+ggplot(plot, aes(x=pos_cum, y=FDR_P_Value)) +
+    geom_point( aes(color=as.factor(chrom)), alpha=0.8, size=1.3) +
+    scale_color_manual(values = rep(c("grey", "skyblue"),25))+
+    scale_x_continuous( label = axisdf$chrom[seq(1, length(axisdf$chrom), by = 2)], breaks= axisdf$center[seq(1, length(axisdf$center), by = 2)] ) +
+    scale_y_continuous(expand = c(0, 0) ) +
+    theme_bw() +
+    theme( 
+      legend.position="none",
+      panel.border = element_blank(),
+      panel.grid.major.x = element_blank(),
+      panel.grid.minor.x = element_blank()
+    )+
+  xlab("Chromosome")+
+  ylab("-log10(FDR Corrected P-value)")
 ```
 
 ## Discussion and Conclusions:
