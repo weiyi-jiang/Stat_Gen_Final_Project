@@ -24,9 +24,18 @@ data.hg19 <- GDCprepare(query_meth.hg19)
 
 meth_data = data.frame(assay(data.hg19))
 
-sample = data.frame(data.hg19$sample_type,data.hg19$barcode)
+## Assessing Whether Samples are Paired or Not:
+ patients = data.frame(Patient_ID = data.hg19$patient, Barcode = data.hg19$barcode)
+ 
+split = data.frame(table(patients$data.hg19.patient))
 
-colnames(sample) = c("Group","Sample_ID")
+split = data.frame(table(patients$Patient_ID))
+
+split = merge(split,patients,by.x = "Var1",by.y="Patient_ID")
+
+sample = data.frame(data.hg19$sample_type,data.hg19$patient,data.hg19$barcode,split$Freq)
+
+colnames(sample) = c("Group","Patient","Sample_ID","Paired")
 
 sample$Group = recode(sample$Group, "Additional - New Primary" = "Primary Tumor")
 
@@ -51,22 +60,61 @@ Case_Meth_Data = Case_Meth_Data[, colSums(is.na(Case_Meth_Data)) != nrow(Case_Me
 Control_Meth_Data = Control_Meth_Data[, colSums(is.na(Control_Meth_Data)) != nrow(Control_Meth_Data)]
 
 table(colnames(Case_Meth_Data)==colnames(Control_Meth_Data)) #check if CpG sites are same
+
+# Add information about sample pairing to meth data:
+
+Case_Meth_Data$Paired = Case$Paired
+
+Control_Meth_Data$Paired = Control$Paired
+
+Case_Meth_Data$Patient = Case$Patient
+
+Control_Meth_Data$Patient = Control$Patient
 ```
 
-## Two Sample T-Tests:
+## Two Sample and Paired T-Tests:
 
 ```{r}
 #Two Sample T tests for Cases and Controls for Each CpG Site:
 
+paired_t_test_res = data.frame()
+
 t_test_res = data.frame()
 
-for (j in seq(1,ncol(Case_Meth_Data))){
-    t_test_res_temp = t.test(Case_Meth_Data[[j]],Control_Meth_Data[[j]],alternative="two.sided")%>%
+Case_Idep_Meth_Data = filter(Case_Meth_Data,!Patient%in%Control_Meth_Data$Patient)
+
+#Control_Idep_Meth_Data = filter(Control_Meth_Data,!Patient%in%Case_Meth_Data$Patient)
+
+Case_Paired_Meth_Data = filter(Case_Meth_Data,Patient%in%Control_Meth_Data$Patient)
+
+Control_Paired_Meth_Data = filter(Control_Meth_Data,Patient%in%Case_Meth_Data$Patient)
+
+##Paired T Tests:
+
+for (j in seq(1,ncol(Case_Paired_Meth_Data)-2)){
+    paired_t_test_res_temp = t.test(Case_Paired_Meth_Data[[j]],Control_Paired_Meth_Data[[j]],alternative="two.sided",paired=T)%>%
+      broom::tidy()
+    paired_t_test_res = rbind(paired_t_test_res,paired_t_test_res_temp) 
+}
+
+paired_t_test_res$CpG_Site = colnames(Case_Paired_Meth_Data)
+
+paired_t_test_res = dplyr::select(paired_t_test_res,c("CpG_Site","p.value"))
+
+## FDR Correction:
+
+paired_t_test_res_FDR = paired_t_test_res%>%
+  mutate(FDR_P_Value = p.adjust(paired_t_test_res$p.value,method="fdr"))
+
+##Two Sample T Tests:
+
+for (j in seq(1,ncol(Case_Idep_Meth_Data)-2)){
+    t_test_res_temp = t.test(Case_Idep_Meth_Data[[j]],Control_Meth_Data[[j]],alternative="two.sided")%>%
       broom::tidy()
     t_test_res = rbind(t_test_res,t_test_res_temp) 
 }
 
-t_test_res$CpG_Site = colnames(Case_Meth_Data)
+t_test_res$CpG_Site = colnames(Case_Idep_Meth_Data)
 
 t_test_res = dplyr::select(t_test_res,c("CpG_Site","p.value"))
 
