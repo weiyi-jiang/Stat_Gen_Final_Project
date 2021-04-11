@@ -63,10 +63,6 @@ table(colnames(Case_Meth_Data)==colnames(Control_Meth_Data)) #check if CpG sites
 
 # Add information about sample pairing to meth data:
 
-Case_Meth_Data$Paired = Case$Paired
-
-Control_Meth_Data$Paired = Control$Paired
-
 Case_Meth_Data$Patient = Case$Patient
 
 Control_Meth_Data$Patient = Control$Patient
@@ -91,7 +87,14 @@ Control_Paired_Meth_Data = filter(Control_Meth_Data,Patient%in%Case_Meth_Data$Pa
 
 ##Paired T Tests:
 
-for (j in seq(1,ncol(Case_Paired_Meth_Data)-2)){
+Case_Paired_Meth_Data = dplyr::select(Case_Paired_Meth_Data,-c(396066,306067))
+
+
+Control_Paired_Meth_Data = dplyr::select(Control_Paired_Meth_Data,-c(396066,306067))
+
+Paired_Combined_Meth_Data$Group = c(rep("Case",160),rep("Control",160))
+
+for (j in seq(1,ncol(Case_Paired_Meth_Data))){
     paired_t_test_res_temp = t.test(Case_Paired_Meth_Data[[j]],Control_Paired_Meth_Data[[j]],alternative="two.sided",paired=T)%>%
       broom::tidy()
     paired_t_test_res = rbind(paired_t_test_res,paired_t_test_res_temp) 
@@ -108,7 +111,7 @@ paired_t_test_res_FDR = paired_t_test_res%>%
 
 ##Two Sample T Tests:
 
-for (j in seq(1,ncol(Case_Idep_Meth_Data)-2)){
+for (j in seq(1,ncol(Case_Idep_Meth_Data))){
     t_test_res_temp = t.test(Case_Idep_Meth_Data[[j]],Control_Meth_Data[[j]],alternative="two.sided")%>%
       broom::tidy()
     t_test_res = rbind(t_test_res,t_test_res_temp) 
@@ -135,9 +138,54 @@ t_test_res_FDR = t_test_res%>%
 ```{r}
 ## Number of Methylation Sites with Significant Difference between Case and Controls:
 
-table(t_test_res_FDR$FDR_P_Value<0.05)
+## Manhattan Plot of FDR Corrected P-Values from Paired T Tests:
 
-## Manhattan Plot of FDR Corrected P-Values from T Test:
+chrom_info = data.frame(rowRanges(data.hg19))%>%
+  dplyr::select("seqnames","start","probeID")
+
+t_test_FDR_w_chrom = merge(paired_t_test_res_FDR,chrom_info,by.x="CpG_Site",by.y="probeID")
+
+colnames(t_test_FDR_w_chrom) = c("CpG_Site","p.value","FDR_P_Value",
+                                 "chrom","pos")
+
+t_test_FDR_w_chrom$FDR_P_Value = -log10(t_test_FDR_w_chrom$FDR_P_Value)
+
+t_test_FDR_w_chrom$chrom = gsub("chr","",t_test_FDR_w_chrom$chrom)
+
+t_test_FDR_w_chrom$chrom = recode(t_test_FDR_w_chrom$chrom,"X" = "23","Y"="24","NA"="25")
+
+t_test_FDR_w_chrom$chrom = as.numeric(t_test_FDR_w_chrom$chrom)
+
+plot <- t_test_FDR_w_chrom %>% 
+  group_by(chrom) %>% 
+  summarise(chr_len=max(pos)) %>% 
+  mutate(tot=cumsum(as.numeric(chr_len))-chr_len) %>%
+  dplyr::select(-chr_len) %>%
+  left_join(t_test_FDR_w_chrom, ., by=c("chrom"="chrom")) %>%
+  arrange(chrom,pos) %>%
+  mutate(pos_cum=pos+tot)
+
+axisdf = plot %>% group_by(chrom) %>% summarize(center=( max(pos_cum) + min(pos_cum) ) / 2 )
+
+axisdf$chrom = c(seq(1,22),"X","Y","MT")
+
+ggplot(plot, aes(x=pos_cum, y=FDR_P_Value)) +
+    geom_point( aes(color=as.factor(chrom)), alpha=0.8, size=1.3) +
+    scale_color_manual(values = rep(c("grey", "skyblue"),25))+
+    scale_x_continuous( label = axisdf$chrom[seq(1, length(axisdf$chrom), by = 2)], breaks= axisdf$center[seq(1, length(axisdf$center), by = 2)] ) +
+    scale_y_continuous(expand = c(0, 0) ) +
+    theme_bw() +
+    theme( 
+      legend.position="none",
+      panel.border = element_blank(),
+      panel.grid.major.x = element_blank(),
+      panel.grid.minor.x = element_blank()
+    )+
+  xlab("Chromosome")+
+  ylab("-log10(FDR Corrected P-value)")+
+  ggtitle("Manhattan Plot for Paired T Test Samples with FDR Correction")
+
+## Manhattan Plot of FDR Corrected P-Values from Two Sample T Tests:
 
 chrom_info = data.frame(rowRanges(data.hg19))%>%
   dplyr::select("seqnames","start","probeID")
@@ -166,7 +214,7 @@ plot <- t_test_FDR_w_chrom %>%
 
 axisdf = plot %>% group_by(chrom) %>% summarize(center=( max(pos_cum) + min(pos_cum) ) / 2 )
 
-axisdf$chrom = c(seq(1,22),"X","Y","NA")
+axisdf$chrom = c(seq(1,22),"X","Y","MT")
 
 ggplot(plot, aes(x=pos_cum, y=FDR_P_Value)) +
     geom_point( aes(color=as.factor(chrom)), alpha=0.8, size=1.3) +
@@ -181,7 +229,8 @@ ggplot(plot, aes(x=pos_cum, y=FDR_P_Value)) +
       panel.grid.minor.x = element_blank()
     )+
   xlab("Chromosome")+
-  ylab("-log10(FDR Corrected P-value)")
+  ylab("-log10(FDR Corrected P-value)")+
+  main("Manhattan Plot for Two Sample T Test Samples with FDR Correction")
 ```
 
 ## Discussion and Conclusions:
