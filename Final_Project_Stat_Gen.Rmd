@@ -87,10 +87,10 @@ Control_Paired_Meth_Data = filter(Control_Meth_Data,Patient%in%Case_Meth_Data$Pa
 
 ##Paired T Tests:
 
-Case_Paired_Meth_Data = dplyr::select(Case_Paired_Meth_Data,-c(396066,306067))
+Case_Paired_Meth_Data = dplyr::select(Case_Paired_Meth_Data,-Patient)
 
 
-Control_Paired_Meth_Data = dplyr::select(Control_Paired_Meth_Data,-c(396066,306067))
+Control_Paired_Meth_Data = dplyr::select(Control_Paired_Meth_Data,-Patient)
 
 Paired_Combined_Meth_Data$Group = c(rep("Case",160),rep("Control",160))
 
