@@ -230,7 +230,7 @@ ggplot(plot, aes(x=pos_cum, y=FDR_P_Value)) +
     )+
   xlab("Chromosome")+
   ylab("-log10(FDR Corrected P-value)")+
-  main("Manhattan Plot for Two Sample T Test Samples with FDR Correction")
+  ggtitle("Manhattan Plot for Two Sample T Test Samples with FDR Correction")
 ```
 
 ## Discussion and Conclusions:
