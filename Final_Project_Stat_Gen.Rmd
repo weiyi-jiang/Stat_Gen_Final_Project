@@ -22,9 +22,13 @@ According to the Mayo Clinic, Renal Cell Carcinoma is the most common kidney can
 
 ## Methods:
 
-To analyze the relationship between DNA Methylation and Renal Cell Carcinoma we will first perform an analysis to find differentially methylated regions (DMR) between the two groups. To do this we will perform two sets of different t tests, stratifying by paired and unpaired samples. For the 159 paired Case/Control samples we will conduct a paired two sided t test for each CpG site in our data. For the other 165 Case Samples, we will conduct a two sample two sided t test comparing them with the 160 Control Samples for each CpG site in our data. Our null hypothesis for these tests is that there is no difference in methylation between cases and controls and our alternate hypothesis is that there is a significant difference in methylation between cases and controls. We will use the standard significance level of 0.05 to determine significance for both the paired and two sample t tests we are doing. We will be performing multiple comparison adjustments on this result as we are comparing hundreds of thousands of CpG sites so not adjusting for multiple comparisons could lead to large errors in our analysis. The method we will use to correct for multiple comparisons is FDR since this allows us to have a better power than when using other methods such as Bonferroni, especially since our sample size is extremely large. 
+### Data Cleaning and Preprocessing:
 
-We will also perform a logistic regression analysis with disease status as the outcome variable and the methylation level as the predictor. This analysis will allow us to get a sense of the overall association between methylation and Renal Cell Carcinoma. Furthermore, using this method we can calculate the Odds Ratio as well as p-value for the association of Methylation and Disease status which are concrete metrics to assess association as a whole. For this analysis our null hypothesis is that there is no association between methylation and disease status and our alternate hypothesis is that there is an association between methylation and disease status.
+### Paired and Independent T-Tests:
+
+To analyze the relationship between DNA Methylation and Renal Cell Carcinoma we will first perform an analysis to find differentially methylated regions (DMR) between the two groups. To do this we will perform two sets of different t tests, stratifying by paired and unpaired samples. For the 159 paired Case/Control samples we will conduct a paired two sided t test for each CpG site in our data. For the other 163 Case Samples, we will conduct a two sample two sided t test comparing them with the 160 Control Samples for each CpG site in our data. Our null hypothesis for these tests is that there is no difference in methylation between cases and controls and our alternate hypothesis is that there is a significant difference in methylation between cases and controls. We will use the standard significance level of 0.05 to determine significance for both the paired and two sample t tests we are doing. We will be performing multiple comparison adjustments on this result as we are comparing hundreds of thousands of CpG sites so not adjusting for multiple comparisons could lead to large errors in our analysis. The method we will use to correct for multiple comparisons is FDR since this allows us to have a better power than when using other methods such as Bonferroni, especially since our sample size is extremely large. 
+
+### Plots:
 
 
 
@@ -218,9 +222,9 @@ t_test_res_FDR = t_test_res %>%
 ## End of tests here, can u check if the previous part is correct?
 ```
 
-# Results:
+## Results:
 
-## Manhattan Plot of FDR Corrected P-Values from Paired T Test:
+### Manhattan Plot of FDR Corrected P-Values from Paired T Test:
 
 ```{r}
 chrom_info = data.frame(rowRanges(GRSets_norm_filter))%>%
@@ -273,7 +277,7 @@ ggplot(plot, aes(x=pos_cum, y=FDR_P_Value)) +
 
 From this manhattan plot of the paired t-test results we can see that 
 
-## Manhattan Plot of FDR Corrected P-Values from Independent T Test:
+### Manhattan Plot of FDR Corrected P-Values from Independent T Test:
 
 ```{r}
 chrom_info = data.frame(rowRanges(GRSets_norm_filter))%>%
@@ -325,7 +329,7 @@ ggplot(plot, aes(x=pos_cum, y=FDR_P_Value)) +
   ylab("-log10(FDR Corrected P-value)")
 ```
 
-## Volcano Plot to pinpoint DMR's (Paired Samples):
+### Volcano Plot to pinpoint DMR's (Paired Samples):
 
 ```{r}
 bVals_t = data.frame(t(bVals))
@@ -354,7 +358,7 @@ ggplot(diff_mean_paired, aes(x=diff_mean, y=-log10(FDR_P_Value),col=diffexpresse
   ggtitle("Volcano Plot showing DMR's for Paired Case/Control Samples")
 ```
 
-## Volcano Plot to pinpoint DMR's (Independent Samples):
+### Volcano Plot to pinpoint DMR's (Independent Samples):
 
 ```{r}
 diff_mean_Idep_Case = map_dfr(bVals_t[ind_cases,],mean,na.rm=T)
@@ -380,5 +384,8 @@ ggplot(diff_mean_Idep, aes(x=diff_mean, y=-log10(FDR_P_Value),col=diffexpressed)
   ylab("-log10(FDR Corrected P-value)")+
   ggtitle("Volcano Plot showing DMR's for Independent Case/Control Samples")
 ```
+
+### Overlap between Paired and Independent Tests:
+
 
 ## Discussion and Conclusions:
