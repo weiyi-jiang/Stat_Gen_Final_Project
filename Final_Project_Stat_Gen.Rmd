@@ -74,7 +74,7 @@ results$sample_type[results$sample_type=="Additional - New Primary"] <- "Primary
 # rm(query)
   
 # Read raw data
-setwd("/users/13038/downloads/Stat_Gen_Final_Project")
+#setwd("/users/13038/downloads/Stat_Gen_Final_Project")
 RGSets <- read.metharray.exp(targets=results)
 manifest <- minfi::getManifest(RGSets)
 manifest
