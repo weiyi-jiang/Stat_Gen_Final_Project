@@ -5,10 +5,15 @@ output: pdf_document
 
 ```{r setup, include=FALSE}
 library(TCGAbiolinks)
-library(tidyverse)
+library(tidyr)
+library(dplyr)
+library(plyr)
+library(ggplot2)
 library(SummarizedExperiment)
 library(DescTools)
 library(qqman)
+library(minfi)
+library(purrr)
 ```
 
 ## Introduction to Data and Background:
@@ -17,7 +22,7 @@ According to the Mayo Clinic, Renal Cell Carcinoma is the most common kidney can
 
 ## Methods:
 
-To analyze the relationship between DNA Methylation and Renal Cell Carcinoma we will first perform an analysis to find differentially methylated regions (DMR) between the two groups. To do this we will perform two sets of different t tests, stratifying by paired and unpaired samples. For the 160 paired Case/Control samples we will conduct a paired two sided t test for each CpG site in our data. For the other 165 Case Samples, we will conduct a two sample two sided t test comparing them with the 160 Control Samples for each CpG site in our data. Our null hypothesis for these tests is that there is no difference in methylation between cases and controls and our alternate hypothesis is that there is a significant difference in methylation between cases and controls. We will use the standard significance level of 0.05 to determine significance for both the paired and two sample t tests we are doing. We will be performing multiple comparison adjustments on this result as we are comparing hundreds of thousands of CpG sites so not adjusting for multiple comparisons could lead to large errors in our analysis. The method we will use to correct for multiple comparisons is FDR since this allows us to have a better power than when using other methods such as Bonferroni, especially since our sample size is extremely large. 
+To analyze the relationship between DNA Methylation and Renal Cell Carcinoma we will first perform an analysis to find differentially methylated regions (DMR) between the two groups. To do this we will perform two sets of different t tests, stratifying by paired and unpaired samples. For the 159 paired Case/Control samples we will conduct a paired two sided t test for each CpG site in our data. For the other 165 Case Samples, we will conduct a two sample two sided t test comparing them with the 160 Control Samples for each CpG site in our data. Our null hypothesis for these tests is that there is no difference in methylation between cases and controls and our alternate hypothesis is that there is a significant difference in methylation between cases and controls. We will use the standard significance level of 0.05 to determine significance for both the paired and two sample t tests we are doing. We will be performing multiple comparison adjustments on this result as we are comparing hundreds of thousands of CpG sites so not adjusting for multiple comparisons could lead to large errors in our analysis. The method we will use to correct for multiple comparisons is FDR since this allows us to have a better power than when using other methods such as Bonferroni, especially since our sample size is extremely large. 
 
 We will also perform a logistic regression analysis with disease status as the outcome variable and the methylation level as the predictor. This analysis will allow us to get a sense of the overall association between methylation and Renal Cell Carcinoma. Furthermore, using this method we can calculate the Odds Ratio as well as p-value for the association of Methylation and Disease status which are concrete metrics to assess association as a whole. For this analysis our null hypothesis is that there is no association between methylation and disease status and our alternate hypothesis is that there is an association between methylation and disease status.
 
@@ -25,12 +30,129 @@ We will also perform a logistic regression analysis with disease status as the o
 
 ## Data Download, Cleaning, and Processing:
 
+# Query 
+```{r}
+# Query raw methylation 450K array from TCGA
+query <- GDCquery(project = "TCGA-KIRC",
+                      data.category = "Raw microarray data",
+                      data.type = "Raw intensities", 
+                      experimental.strategy = "Methylation array", 
+                      legacy = TRUE,
+                      file.type = ".idat",
+                      platform = "Illumina Human Methylation 450")
+clinical <- GDCquery_clinic(project = "TCGA-KIRC")
+# Download IDAT files from TCGA
+tryCatch(GDCdownload(query, method = "api", files.per.chunk = 20),
+             error = function(e) GDCdownload(query, method = "client"))
+# Move to current work dir
+for(file in dir(".",pattern = ".idat", recursive = T)){
+  TCGAbiolinks:::move(file,basename(file))
+}
+```
+
+# Preprocess
+Reference: https://bioconductor.org/help/course-materials/2014/BioC2014/minfi_BioC2014.pdf
+https://www.ncbi.nlm.nih.gov/pmc/articles/PMC4916993/
+https://www.nature.com/articles/bjc2013496
+https://www.ncbi.nlm.nih.gov/pmc/articles/PMC5302158/
+https://www.ncbi.nlm.nih.gov/pmc/articles/PMC3592906/
+```{r}
+# Reformat to a target data frame
+results <- getResults(query) %>%
+  group_by(cases) %>%
+  mutate(Basename=substr(file_name, 1, 17)) %>%
+  dplyr::select(cases, state, sample_type, cases.submitter_id, sample.submitter_id, Basename) %>% unique() %>%
+  left_join(clinical %>%
+              select(submitter_id, gender),
+            by=c("cases.submitter_id"="submitter_id"))
+results$sample_type[results$sample_type=="Additional - New Primary"] <- "Primary Tumor"
+
+# rm(query)
+  
+# Read raw data
+setwd("/users/13038/downloads/Stat_Gen_Final_Project")
+RGSets <- read.metharray.exp(targets=results)
+manifest <- minfi::getManifest(RGSets)
+manifest
+head(getProbeInfo(manifest))
+# rm(RGSets)
+
+# Quality Control for Samples
+MSets <- preprocessRaw(RGSets)
+qc <- getQC(MSets)
+head(qc)
+plotQC(qc)
+rm(MSets)
+
+detP <- detectionP(RGSets)
+detP[1:5,1:5]
+keep <- colMeans(detP) < 0.01 # Remove sample with detection p-value > 0.01
+table(keep) # No one is removed
+
+# The 402nd sample seems to be bad from the QCplot, remove it
+RGSets <- RGSets[,-402]
+results <- results[-402,]
+detP <- detP[,-402]
+
+# Normalization (preprocessFunnorm: useful for can studies)
+GRSets_norm <- preprocessFunnorm(RGSets)
+plotSex(GRSets_norm)
+# Some predicted sexes are wrong
+GRSets_norm@colData$gender[GRSets_norm@colData$gender=="female"] <- "F"
+GRSets_norm@colData$gender[GRSets_norm@colData$gender=="male"] <- "M"
+GRSets_norm@colData$predictedSex <- GRSets_norm@colData$gender
+plotSex(GRSets_norm)
+
+
+# Beta densities for unnormalized & normalized data
+par(mfrow=c(1,2))
+densityPlot(RGSets, sampGroups = results$sample_type, main="Raw", legend=F)
+legend("top", legend = levels(factor(results$sample_type)),
+       text.col=RColorBrewer::brewer.pal(8,"Dark2"), cex = 0.6)
+densityPlot(getBeta(GRSets_norm), sampGroups = results$sample_type, main="Normalized", legend=F)
+legend("top", legend = levels(factor(results$sample_type)),
+       text.col=RColorBrewer::brewer.pal(8,"Dark2"), cex = 0.6)
+
+# Quality Control for probes
+detP <- detP[match(featureNames(GRSets_norm),rownames(detP)),] # Ensure probes are in the same order
+keep <- rowSums(detP < 0.01) == ncol(GRSets_norm) # Remove probes with one or more detection p-value > 0.01
+table(keep)
+GRSets_norm_filter <- GRSets_norm[keep,]
+
+ann450k <-  getAnnotation(IlluminaHumanMethylation450kanno.ilmn12.hg19)
+keep <- !(featureNames(GRSets_norm_filter) %in% 
+            ann450k$Name[ann450k$chr %in% c("chrX", "chrY")])
+table(keep) 
+GRSets_norm_filter <- GRSets_norm_filter[keep,] # Remove probes on the sex chromosomes
+
+GRSets_norm_filter <- dropLociWithSnps(GRSets_norm_filter) # Remove probes with SNPs at CpG sites
+
+xReactiveProbes <- read.csv("/users/13038/downloads/Stat_Gen_Final_Project/data/48639-non-specific-probes-Illumina450k.csv")
+keep <- !(featureNames(GRSets_norm_filter) %in% xReactiveProbes$TargetID)
+table(keep)
+GRSets_norm_filter <- GRSets_norm_filter[keep,] # Remove cross reactive probes
+
+# Get M values and beta values
+mVals <- getM(GRSets_norm_filter)
+bVals <- getBeta(GRSets_norm_filter)
+par(mfrow=c(1,2))
+densityPlot(mVals, sampGroups=results$sample_type, main="M values", xlab="M values", legend=F)
+legend("topleft", legend = levels(factor(results$sample_type)),
+       text.col=RColorBrewer::brewer.pal(8,"Dark2"), cex = 0.6)
+densityPlot(bVals, sampGroups=results$sample_type, main="Beta values", xlab="Beta values", legend=F)
+legend("top", legend = levels(factor(results$sample_type)),
+       text.col=RColorBrewer::brewer.pal(8,"Dark2"), cex = 0.6)
+
+annotations <- getAnnotation(GRSets_norm_filter)
+ 
+```
+
 ```{r}
 ## Assessing Whether Samples are Paired or Not:
 multiple_inputs <- results %>%
-  group_by(sample.submitter_id) %>%
-  summarise(count = n()) %>%
-  filter(count > 1)
+  dplyr::group_by(sample.submitter_id) %>%
+  dplyr::summarise(count = n()) %>%
+  dplyr::filter(count > 1)
 which(results$sample.submitter_id==multiple_inputs$sample.submitter_id)
 bVals[,27] <- (bVals[,27]+bVals[,167])/2
 bVals[,92] <- (bVals[,92]+bVals[,296])/2
@@ -39,21 +161,26 @@ results <- results[-c(167,296),]
 colnames(bVals) <- results$sample.submitter_id
 
 paired_samples <- results %>%
-  group_by(cases.submitter_id) %>%
-  mutate(count = n_distinct(sample_type)) %>%
-  filter(count > 1) %>% ungroup() %>%
-  arrange(cases.submitter_id)
+  dplyr::group_by(cases.submitter_id) %>%
+  dplyr::mutate(count = n_distinct(sample_type)) %>%
+  dplyr::filter(count > 1) %>% dplyr::ungroup() %>%
+  dplyr::arrange(cases.submitter_id)
 
 unpaired_controls <- results %>%
-  filter(sample_type == "Solid Tissue Normal",
+  dplyr::filter(sample_type == "Solid Tissue Normal",
          !(cases.submitter_id %in% paired_samples$cases.submitter_id)) %>%
   pull(sample.submitter_id)
 
 unpaired_cases <- results %>%
-  filter(sample_type == "Primary Tumor",
+ dplyr::filter(sample_type == "Primary Tumor",
          !(cases.submitter_id %in% paired_samples$cases.submitter_id)) %>%
   pull(sample.submitter_id)
 
+```
+
+## Paired and Independent T-Tests:
+
+```{r}
 # Paired t-tests
 paired_cases <- paired_samples %>%
   filter(sample_type == "Primary Tumor") %>%
@@ -89,145 +216,19 @@ t_test_res = data.frame(cbind(p.value=t_test_res, CpG_Site))
 t_test_res_FDR = t_test_res %>%
   mutate(FDR_P_Value = p.adjust(t_test_res$p.value,method="fdr"))
 ## End of tests here, can u check if the previous part is correct?
-
-
-patients = data.frame(Patient_ID = data.hg19$patient, Barcode = data.hg19$barcode)
-
-
-sample = data.frame(data.hg19$sample_type,data.hg19$patient,data.hg19$barcode)
-
-colnames(sample) = c("Group","Patient","Sample_ID")
-
-sample$Group = recode(sample$Group, "Additional - New Primary" = "Primary Tumor")
-
-Case = filter(sample, Group == "Primary Tumor")
-
-Case$Sample_ID = gsub("-",".",Case$Sample_ID)
-
-Control = filter(sample, Group == "Solid Tissue Normal")
-
-Control$Sample_ID = gsub("-",".",Control$Sample_ID)
-
-Case_Meth_Data = dplyr::select(meth_data,tidyselect::contains(Case$Sample_ID))
-
-Control_Meth_Data = dplyr::select(meth_data,tidyselect::contains(Control$Sample_ID))
-
-Case_Meth_Data = data.frame(t(Case_Meth_Data))
-
-Control_Meth_Data = data.frame(t(Control_Meth_Data))
-
-Case_Meth_Data = Case_Meth_Data[, colSums(is.na(Case_Meth_Data)) != nrow(Case_Meth_Data)]
-
-Control_Meth_Data = Control_Meth_Data[, colSums(is.na(Control_Meth_Data)) != nrow(Control_Meth_Data)]
-
-table(colnames(Case_Meth_Data)==colnames(Control_Meth_Data)) #check if CpG sites are same
-
-# Add information about sample pairing to meth data:
-
-Case_Meth_Data$Patient = Case$Patient
-
-Control_Meth_Data$Patient = Control$Patient
 ```
 
-## Two Sample and Paired T-Tests: I have this in the previous block
-
-```{r}
-#Two Sample T tests for Cases and Controls for Each CpG Site:
-
-paired_t_test_res = data.frame()
-
-t_test_res = data.frame()
-
-Case_Idep_Meth_Data = filter(Case_Meth_Data,!Patient%in%Control_Meth_Data$Patient)
-
-#Control_Idep_Meth_Data = filter(Control_Meth_Data,!Patient%in%Case_Meth_Data$Patient)
-
-Case_Paired_Meth_Data = filter(Case_Meth_Data,Patient%in%Control_Meth_Data$Patient)
-
-Control_Paired_Meth_Data = filter(Control_Meth_Data,Patient%in%Case_Meth_Data$Patient)
-
-##Paired T Tests:
-
-Case_Paired_Meth_Data = dplyr::select(Case_Paired_Meth_Data,-c(396066))
-
-
-Control_Paired_Meth_Data = dplyr::select(Control_Paired_Meth_Data,-c(396066))
-
-
-Paired_Combined_Meth_Data = rbind(Case_Paired_Meth_Data,Control_Paired_Meth_Data)
-
-Paired_Combined_Meth_Data$Group = factor(c(rep("Case",160),rep("Control",160)))
-
-
-for (j in seq(1,ncol(Case_Paired_Meth_Data))){
-    paired_t_test_res_temp = t.test(Case_Paired_Meth_Data[[j]],Control_Paired_Meth_Data[[j]],alternative="two.sided",paired=T)$p.value
-    paired_t_test_res = rbind(paired_t_test_res,paired_t_test_res_temp) 
-}
-
-paired_t_test_res$CpG_Site = colnames(Case_Paired_Meth_Data)
-
-colnames(paired_t_test_res) = c("p.value","CpG_Site")
-
-## FDR Correction:
-
-paired_t_test_res_FDR = paired_t_test_res%>%
-  mutate(FDR_P_Value = p.adjust(paired_t_test_res$p.value,method="fdr"))
-
-##Two Sample T Tests:
-
-for (j in seq(1,ncol(Case_Idep_Meth_Data)-1)){
-    t_test_res_temp = t.test(Case_Idep_Meth_Data[[j]],Control_Meth_Data[[j]],alternative="two.sided")$p.value
-    t_test_res = rbind(t_test_res,t_test_res_temp) 
-}
-
-t_test_res$CpG_Site = colnames(Case_Paired_Meth_Data)
-
-colnames(t_test_res) = c("p.value","CpG_Site")
-
-## FDR Correction:
-
-t_test_res_FDR = t_test_res%>%
-  mutate(FDR_P_Value = p.adjust(t_test_res$p.value,method="fdr"))
-```
-
-## Logistic Regression:
-
-```{r}
-# For paired
-tbVals <- tibble(t(bVals))
-sample_id <- rownames(tbVals)
-tbVals <- bind_cbind(sample_id=sample_id, tbVals)
-
-# For independent
-
-```
-
-## Results:
-
-## Number of Methylation Sites with Significant Difference between Case and Controls:
-
-```{r}
-
-table(paired_t_test_res_FDR$FDR_P_Value<0.05)
-
-table(t_test_res_FDR$FDR_P_Value<0.05)
-
-# Overlap
-sig_in_paired <- paired_t_test_res_FDR$CpG_Site[paired_t_test_res_FDR$FDR_P_Value<0.05]
-sig_in_2sample <- t_test_res_FDR$CpG_Site[t_test_res_FDR$FDR_P_Value<0.05]
-overlap <- intersect(sig_in_paired, sig_in_2sample)
-```
+# Results:
 
 ## Manhattan Plot of FDR Corrected P-Values from Paired T Test:
 
 ```{r}
-# Can u change the names according to 'annotations'
-names(annotations)
-# Name = "probeID"?
-# chr = seqnames?
-# pos = start?
-chrom_info = data.frame(rowRanges(data.hg19))%>%
-  dplyr::select("seqnames","start","probeID")
+chrom_info = data.frame(rowRanges(GRSets_norm_filter))%>%
+  dplyr::select("seqnames","start")
+
+chrom_info = cbind(chrom_info,GRSets_norm_filter@rowRanges@ranges@NAMES)
+
+colnames(chrom_info)[3] = "probeID"
 
 t_test_FDR_w_chrom = merge(paired_t_test_res_FDR,chrom_info,by.x="CpG_Site",by.y="probeID")
 
@@ -243,21 +244,20 @@ t_test_FDR_w_chrom$chrom = recode(t_test_FDR_w_chrom$chrom,"X" = "23","Y"="24","
 t_test_FDR_w_chrom$chrom = as.numeric(t_test_FDR_w_chrom$chrom)
 
 plot <- t_test_FDR_w_chrom %>% 
-  group_by(chrom) %>% 
-  summarise(chr_len=max(pos)) %>% 
-  mutate(tot=cumsum(as.numeric(chr_len))-chr_len) %>%
+  dplyr::group_by(chrom) %>% 
+  dplyr::summarise(chr_len=max(pos)) %>% 
+  dplyr::mutate(tot=cumsum(as.numeric(chr_len))-chr_len) %>%
   dplyr::select(-chr_len) %>%
-  left_join(t_test_FDR_w_chrom, ., by=c("chrom"="chrom")) %>%
-  arrange(chrom,pos) %>%
-  mutate(pos_cum=pos+tot)
+  dplyr::left_join(t_test_FDR_w_chrom, ., by=c("chrom"="chrom")) %>%
+  dplyr::arrange(chrom,pos) %>%
+  dplyr::mutate(pos_cum=pos+tot)
 
-axisdf = plot %>% group_by(chrom) %>% summarize(center=( max(pos_cum) + min(pos_cum) ) / 2 )
+axisdf = plot %>% dplyr::group_by(chrom) %>% dplyr::summarize(center=( max(pos_cum) + min(pos_cum) ) / 2 )
 
-axisdf$chrom = c(seq(1,22),"X","Y","MT")
 
 ggplot(plot, aes(x=pos_cum, y=FDR_P_Value)) +
     geom_point( aes(color=as.factor(chrom)), alpha=0.8, size=1.3) +
-    scale_color_manual(values = rep(c("grey", "skyblue"),25))+
+    scale_color_manual(values = rep(c("grey", "skyblue"),22))+
     scale_x_continuous( label = axisdf$chrom[seq(1, length(axisdf$chrom), by = 2)], breaks= axisdf$center[seq(1, length(axisdf$center), by = 2)] ) +
     scale_y_continuous(expand = c(0, 0) ) +
     theme_bw() +
@@ -276,9 +276,12 @@ From this manhattan plot of the paired t-test results we can see that
 ## Manhattan Plot of FDR Corrected P-Values from Independent T Test:
 
 ```{r}
+chrom_info = data.frame(rowRanges(GRSets_norm_filter))%>%
+  dplyr::select("seqnames","start")
 
-chrom_info = data.frame(rowRanges(data.hg19))%>%
-  dplyr::select("seqnames","start","probeID")
+chrom_info = cbind(chrom_info,GRSets_norm_filter@rowRanges@ranges@NAMES)
+
+colnames(chrom_info)[3] = "probeID"
 
 t_test_FDR_w_chrom = merge(t_test_res_FDR,chrom_info,by.x="CpG_Site",by.y="probeID")
 
@@ -304,11 +307,11 @@ plot <- t_test_FDR_w_chrom %>%
 
 axisdf = plot %>% group_by(chrom) %>% summarize(center=( max(pos_cum) + min(pos_cum) ) / 2 )
 
-axisdf$chrom = c(seq(1,22),"X","Y","MT")
+axisdf$chrom = c(seq(1,22))
 
 ggplot(plot, aes(x=pos_cum, y=FDR_P_Value)) +
     geom_point( aes(color=as.factor(chrom)), alpha=0.8, size=1.3) +
-    scale_color_manual(values = rep(c("grey", "skyblue"),25))+
+    scale_color_manual(values = rep(c("grey", "skyblue"),22))+
     scale_x_continuous( label = axisdf$chrom[seq(1, length(axisdf$chrom), by = 2)], breaks= axisdf$center[seq(1, length(axisdf$center), by = 2)] ) +
     scale_y_continuous(expand = c(0, 0) ) +
     theme_bw() +
@@ -325,8 +328,10 @@ ggplot(plot, aes(x=pos_cum, y=FDR_P_Value)) +
 ## Volcano Plot to pinpoint DMR's (Paired Samples):
 
 ```{r}
-diff_mean_paired_Case = map_dfr(Case_Paired_Meth_Data,mean,na.rm=T)
-diff_mean_paired_Control = map_dfr(Control_Paired_Meth_Data,mean,na.rm=T)
+bVals_t = data.frame(t(bVals))
+
+diff_mean_paired_Case = map_dfr(bVals_t[paired_cases,],mean,na.rm=T)
+diff_mean_paired_Control = map_dfr(bVals_t[paired_controls,],mean,na.rm=T)
 diff_mean_paired = diff_mean_paired_Case-diff_mean_paired_Control
 diff_mean_paired = pivot_longer(diff_mean_paired,1:ncol(diff_mean_paired),values_to = "diff_mean", names_to = "CpG_Site")
 diff_mean_paired = merge(diff_mean_paired,paired_t_test_res_FDR,by="CpG_Site")
@@ -352,8 +357,8 @@ ggplot(diff_mean_paired, aes(x=diff_mean, y=-log10(FDR_P_Value),col=diffexpresse
 ## Volcano Plot to pinpoint DMR's (Independent Samples):
 
 ```{r}
-diff_mean_Idep_Case = map_dfr(Case_Idep_Meth_Data[,-ncol(Case_Idep_Meth_Data)],mean,na.rm=T)
-diff_mean_Idep_Control = map_dfr(Control_Meth_Data[,-ncol(Case_Idep_Meth_Data)],mean,na.rm=T)
+diff_mean_Idep_Case = map_dfr(bVals_t[ind_cases,],mean,na.rm=T)
+diff_mean_Idep_Control = map_dfr(bVals_t[ind_controls,],mean,na.rm=T)
 diff_mean_Idep = diff_mean_Idep_Case-diff_mean_Idep_Control
 diff_mean_Idep = pivot_longer(diff_mean_Idep,1:ncol(diff_mean_Idep),values_to = "diff_mean", names_to = "CpG_Site")
 diff_mean_Idep = merge(diff_mean_Idep,t_test_res_FDR,by="CpG_Site")
