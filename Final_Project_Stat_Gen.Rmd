@@ -26,17 +26,73 @@ We will also perform a logistic regression analysis with disease status as the o
 ## Data Download, Cleaning, and Processing:
 
 ```{r}
-query_meth.hg19 <- GDCquery(project= "TCGA-KIRC",
-                            data.category = "DNA methylation",
-                            platform = "Illumina Human Methylation 450",
-                            legacy = TRUE)
-GDCdownload(query_meth.hg19)
-data.hg19 <- GDCprepare(query_meth.hg19)
-
-meth_data = data.frame(assay(data.hg19))
-
 ## Assessing Whether Samples are Paired or Not:
- patients = data.frame(Patient_ID = data.hg19$patient, Barcode = data.hg19$barcode)
+multiple_inputs <- results %>%
+  group_by(sample.submitter_id) %>%
+  summarise(count = n()) %>%
+  filter(count > 1)
+which(results$sample.submitter_id==multiple_inputs$sample.submitter_id)
+bVals[,27] <- (bVals[,27]+bVals[,167])/2
+bVals[,92] <- (bVals[,92]+bVals[,296])/2
+bVals <- bVals[,-c(167,296)]
+results <- results[-c(167,296),]
+colnames(bVals) <- results$sample.submitter_id
+
+paired_samples <- results %>%
+  group_by(cases.submitter_id) %>%
+  mutate(count = n_distinct(sample_type)) %>%
+  filter(count > 1) %>% ungroup() %>%
+  arrange(cases.submitter_id)
+
+unpaired_controls <- results %>%
+  filter(sample_type == "Solid Tissue Normal",
+         !(cases.submitter_id %in% paired_samples$cases.submitter_id)) %>%
+  pull(sample.submitter_id)
+
+unpaired_cases <- results %>%
+  filter(sample_type == "Primary Tumor",
+         !(cases.submitter_id %in% paired_samples$cases.submitter_id)) %>%
+  pull(sample.submitter_id)
+
+# Paired t-tests
+paired_cases <- paired_samples %>%
+  filter(sample_type == "Primary Tumor") %>%
+  pull(sample.submitter_id)
+
+paired_controls <- paired_samples %>%
+  filter(sample_type == "Solid Tissue Normal") %>%
+  pull(sample.submitter_id)
+
+CpG_Site = rownames(bVals)
+
+paired_t_test_res <- c() # change to a vector, so it will be faster (I guess)
+for (j in 1:nrow(bVals)){
+    paired_t_test_res_temp = t.test(bVals[j,paired_cases],bVals[j,paired_controls],alternative="two.sided",paired=T)$p.value
+    paired_t_test_res <- c(paired_t_test_res, paired_t_test_res_temp)
+}
+paired_t_test_res = data.frame(cbind(p.value=paired_t_test_res, CpG_Site))
+
+paired_t_test_res_FDR = paired_t_test_res %>%
+  mutate(FDR_P_Value = p.adjust(paired_t_test_res$p.value,method="fdr"))
+
+# Two-sample t-tests
+ind_cases <- unpaired_cases
+ind_controls <- c(unpaired_controls, paired_controls)
+
+t_test_res <- c()
+for (j in 1:nrow(bVals)){
+    t_test_res_temp = t.test(bVals[j,ind_cases],bVals[j,ind_controls],alternative="two.sided")$p.value
+    t_test_res <- c(t_test_res, t_test_res_temp)
+}
+
+t_test_res = data.frame(cbind(p.value=t_test_res, CpG_Site))
+t_test_res_FDR = t_test_res %>%
+  mutate(FDR_P_Value = p.adjust(t_test_res$p.value,method="fdr"))
+## End of tests here, can u check if the previous part is correct?
+
+
+patients = data.frame(Patient_ID = data.hg19$patient, Barcode = data.hg19$barcode)
+
 
 sample = data.frame(data.hg19$sample_type,data.hg19$patient,data.hg19$barcode)
 
@@ -73,7 +129,7 @@ Case_Meth_Data$Patient = Case$Patient
 Control_Meth_Data$Patient = Control$Patient
 ```
 
-## Two Sample and Paired T-Tests:
+## Two Sample and Paired T-Tests: I have this in the previous block
 
 ```{r}
 #Two Sample T tests for Cases and Controls for Each CpG Site:
@@ -137,6 +193,12 @@ t_test_res_FDR = t_test_res%>%
 ## Logistic Regression:
 
 ```{r}
+# For paired
+tbVals <- tibble(t(bVals))
+sample_id <- rownames(tbVals)
+tbVals <- bind_cbind(sample_id=sample_id, tbVals)
+
+# For independent
 
 ```
 
@@ -150,11 +212,20 @@ table(paired_t_test_res_FDR$FDR_P_Value<0.05)
 
 table(t_test_res_FDR$FDR_P_Value<0.05)
 
+# Overlap
+sig_in_paired <- paired_t_test_res_FDR$CpG_Site[paired_t_test_res_FDR$FDR_P_Value<0.05]
+sig_in_2sample <- t_test_res_FDR$CpG_Site[t_test_res_FDR$FDR_P_Value<0.05]
+overlap <- intersect(sig_in_paired, sig_in_2sample)
 ```
 
 ## Manhattan Plot of FDR Corrected P-Values from Paired T Test:
 
 ```{r}
+# Can u change the names according to 'annotations'
+names(annotations)
+# Name = "probeID"?
+# chr = seqnames?
+# pos = start?
 chrom_info = data.frame(rowRanges(data.hg19))%>%
   dplyr::select("seqnames","start","probeID")
 
