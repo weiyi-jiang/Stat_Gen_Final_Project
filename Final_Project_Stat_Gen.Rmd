@@ -30,6 +30,7 @@ To analyze the relationship between DNA Methylation and Renal Cell Carcinoma we 
 
 ### Plots:
 
+To visualize our results effectively we will do volcano plots and manhattan plots for both our paired t test and independent t test results. The manhattan plots will allow us to visualize which regions of the genome have the most significant difference in methylation between Cases and Controls according to our t tests and the volcano plots will allow us to analyze if the CpG sites that are significant and have the largest change in methylation between cases and controls, as these CpG sites may be the most biologically relevant ones.  
 
 
 ## Data Download, Cleaning, and Processing:
