@@ -14,6 +14,7 @@ library(DescTools)
 library(qqman)
 library(minfi)
 library(purrr)
+library(biomaRt)
 ```
 
 ## Introduction to Data and Background:
@@ -203,7 +204,9 @@ for (j in 1:nrow(bVals)){
     paired_t_test_res_temp = t.test(bVals[j,paired_cases],bVals[j,paired_controls],alternative="two.sided",paired=T)$p.value
     paired_t_test_res <- c(paired_t_test_res, paired_t_test_res_temp)
 }
-paired_t_test_res = data.frame(cbind(p.value=paired_t_test_res, CpG_Site))
+paired_t_test_res = data.frame(p.value=paired_t_test_res)
+
+paired_t_test_res = cbind(paired_t_test_res,CpG_Site)
 
 paired_t_test_res_FDR = paired_t_test_res %>%
   mutate(FDR_P_Value = p.adjust(paired_t_test_res$p.value,method="fdr"),
@@ -219,7 +222,10 @@ for (j in 1:nrow(bVals)){
     t_test_res <- c(t_test_res, t_test_res_temp)
 }
 
-t_test_res = data.frame(cbind(p.value=t_test_res, CpG_Site))
+t_test_res = data.frame(p.value=t_test_res)
+
+t_test_res = cbind(t_test_res,CpG_Site)
+
 t_test_res_FDR = t_test_res %>%
   mutate(FDR_P_Value = p.adjust(t_test_res$p.value,method="fdr"),
          FWER_P_Value = p.adjust(t_test_res$p.value, method="bonferroni"))
@@ -437,7 +443,7 @@ ggplot(plot, aes(x=pos_cum, y=FWER_P_Value)) +
   ylab("-log10(FWER Corrected P-value)")
 ```
 
-### Volcano Plot to pinpoint DMR's (Paired Samples):
+### Volcano Plot for Paired Samples:
 
 ```{r}
 bVals_t = data.frame(t(bVals))
@@ -463,10 +469,10 @@ ggplot(diff_mean_paired, aes(x=diff_mean, y=-log10(FDR_P_Value),col=diffexpresse
   geom_vline(xintercept = -0.25,color="darkred")+
   xlab("Difference in Mean Methylation between Case and Controls")+
   ylab("-log10(FDR Corrected P-value)")+
-  ggtitle("Volcano Plot showing DMR's for Paired Case/Control Samples")
+  ggtitle("Volcano Plot for Paired Case/Control Samples")
 ```
 
-### Volcano Plot to pinpoint DMR's (Independent Samples):
+### Volcano Plot for Independent Samples:
 
 ```{r}
 diff_mean_Idep_Case = map_dfr(bVals_t[ind_cases,],mean,na.rm=T)
@@ -490,7 +496,103 @@ ggplot(diff_mean_Idep, aes(x=diff_mean, y=-log10(FDR_P_Value),col=diffexpressed)
   geom_vline(xintercept = -0.25,color="darkred")+
   xlab("Difference in Mean Methylation between Case and Controls")+
   ylab("-log10(FDR Corrected P-value)")+
-  ggtitle("Volcano Plot showing DMR's for Independent Case/Control Samples")
+  ggtitle("Volcano Plot for Independent Case/Control Samples")
+```
+
+### Top 10 CpG Sites By Volcano Plots:
+
+```{r}
+chrom_info = data.frame(CpG_Site = GRSets_norm_filter@rowRanges@ranges@NAMES,rowRanges(GRSets_norm_filter))
+
+top_10_paired = arrange(diff_mean_paired,FDR_P_Value)
+
+top_10_paired = filter(top_10_paired,!diffexpressed=="No Difference In Methylation"&!diffexpressed=="Not Significant")
+
+top_10_paired = head(top_10_paired,10)
+
+top_10_paired = merge(top_10_paired,chrom_info,by="CpG_Site")
+
+top_10_paired$seqnames = gsub("chr","",top_10_paired$seqnames)
+
+mart_export <- read.delim("C:/Users/13038/Downloads/Stat_Gen_Final_Project/mart_export.txt")
+
+all.genes = data.frame()
+
+for (i in 1:nrow(top_10_paired)){
+  for (j in 1:nrow(mart_export)){
+
+if (top_10_paired$seqnames[i]==mart_export$Chromosome.scaffold.name[j]&
+    top_10_paired$start[i]>=mart_export$Gene.start..bp.[j]&
+    top_10_paired$start[i]<=mart_export$Gene.end..bp.[j]){
+  all.genes.tmp = cbind(top_10_paired$CpG_Site[i],mart_export$HGNC.symbol[j],mart_export$Gene.stable.ID[j])
+}
+  }
+all.genes = rbind(all.genes,all.genes.tmp)
+}
+
+top_10_idep = arrange(diff_mean_Idep,FDR_P_Value)
+
+top_10_idep = filter(top_10_idep,!diffexpressed=="No Difference In Methylation"&!diffexpressed=="Not Significant")
+
+top_10_idep = head(top_10_idep,10)
+
+top_10_idep = merge(top_10_idep,chrom_info,by="CpG_Site")
+
+top_10_idep$seqnames = gsub("chr","",top_10_idep$seqnames)
+
+all.genes.idep = data.frame()
+
+for (i in 1:nrow(top_10_idep)){
+  for (j in 1:nrow(mart_export)){
+
+if (top_10_idep$seqnames[i]==mart_export$Chromosome.scaffold.name[j]&
+    top_10_idep$start[i]>=mart_export$Gene.start..bp.[j]&
+    top_10_idep$start[i]<=mart_export$Gene.end..bp.[j]){
+  all.genes.tmp = cbind(top_10_idep$CpG_Site[i],mart_export$HGNC.symbol[j],mart_export$Gene.stable.ID[j])
+}
+  }
+all.genes.idep = rbind(all.genes.idep,all.genes.tmp)
+}
+
+paired_gene_table = merge(all.genes,top_10_paired,by.x = "V1",by.y="CpG_Site")
+
+paired_gene_table=paired_gene_table[-10,]
+
+paired_gene_table = dplyr::select(paired_gene_table,c(seq(1,4),6,8))
+
+paired_gene_table$V2[2] = "AC073332.1"
+
+paired_gene_table = rbind(paired_gene_table,
+                          data.frame(V1 = top_10_paired$CpG_Site[10],
+                                     V2 = "N/A",
+                                     V3 = "N/A",
+                              diff_mean = top_10_paired$diff_mean[10],
+                          FDR_P_Value = top_10_paired$FDR_P_Value[10],
+                          diffexpressed = top_10_paired$diffexpressed[10]))
+
+colnames(paired_gene_table) = c("CpG Site","Gene ID", "Ensembl Gene ID", "Difference in Mean Methylation between Cases and Controls","FDR-Corrected P Value","Methylation Status (Case vs Controls)")
+
+paired_gene_table%>%knitr::kable(caption="Top 10 CpG Sites Prioritized from Paired T Test Volcano Plot and Genes they are located in",digits = 5)
+
+idep_gene_table = merge(all.genes.idep,top_10_idep,by.x = "V1",by.y="CpG_Site")
+
+idep_gene_table=idep_gene_table[c(1,2,3,6,8),]
+
+idep_gene_table = dplyr::select(idep_gene_table,c(seq(1,4),6,8))
+
+idep_gene_table$V2[1] = "AC073332.1"
+
+idep_gene_table = rbind(idep_gene_table,
+                          data.frame(V1 = top_10_idep$CpG_Site[c(1,5,6,8,10)],
+                                     V2 = "N/A",
+                                     V3 = "N/A",
+                              diff_mean = top_10_idep$diff_mean[c(1,5,6,8,10)],
+                          FDR_P_Value = top_10_idep$FDR_P_Value[c(1,5,6,8,10)],
+                          diffexpressed = top_10_idep$diffexpressed[c(1,5,6,8,10)]))
+
+colnames(idep_gene_table) = c("CpG Site","Gene ID", "Ensembl Gene ID", "Difference in Mean Methylation between Cases and Controls","FDR-Corrected P Value","Methylation Status (Case vs Controls)")
+
+idep_gene_table%>%knitr::kable(caption="Top 10 CpG Sites Prioritized from Independent T Test Volcano Plot and Genes they are located in",digits = 5)
 ```
 
 ### Overlap between Paired and Independent Tests:
