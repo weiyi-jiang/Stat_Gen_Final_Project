@@ -24,13 +24,14 @@ According to the Mayo Clinic, Renal Cell Carcinoma is the most common kidney can
 
 ### Data Cleaning and Preprocessing:
 
+
+
 ### Paired and Independent T-Tests:
 
 To analyze the relationship between DNA Methylation and Renal Cell Carcinoma we will first perform an analysis to find differentially methylated regions (DMR) between the two groups. To do this we will perform two sets of different t tests, stratifying by paired and unpaired samples. For the 159 paired Case/Control samples we will conduct a paired two sided t test for each CpG site in our data. For the other 163 Case Samples, we will conduct a two sample two sided t test comparing them with the 160 Control Samples for each CpG site in our data. Our null hypothesis for these tests is that there is no difference in methylation between cases and controls and our alternate hypothesis is that there is a significant difference in methylation between cases and controls. We will use the standard significance level of 0.05 to determine significance for both the paired and two sample t tests we are doing. We will be performing multiple comparison adjustments on this result as we are comparing hundreds of thousands of CpG sites so not adjusting for multiple comparisons could lead to large errors in our analysis. The method we will use to correct for multiple comparisons is FDR since this allows us to have a better power than when using other methods such as Bonferroni, especially since our sample size is extremely large. 
 
 ### Plots:
 
-To visualize our results effectively we will do volcano plots and manhattan plots for both our paired t test and independent t test results. The manhattan plots will allow us to visualize which regions of the genome have the most significant difference in methylation between Cases and Controls according to our t tests and the volcano plots will allow us to analyze if the CpG sites that are significant and have the largest change in methylation between cases and controls, as these CpG sites may be the most biologically relevant ones.  
 
 
 ## Data Download, Cleaning, and Processing:
@@ -205,7 +206,8 @@ for (j in 1:nrow(bVals)){
 paired_t_test_res = data.frame(cbind(p.value=paired_t_test_res, CpG_Site))
 
 paired_t_test_res_FDR = paired_t_test_res %>%
-  mutate(FDR_P_Value = p.adjust(paired_t_test_res$p.value,method="fdr"))
+  mutate(FDR_P_Value = p.adjust(paired_t_test_res$p.value,method="fdr"),
+         FWER_P_Value = p.adjust(paired_t_test_res$p.value, method="bonferroni"))
 
 # Two-sample t-tests
 ind_cases <- unpaired_cases
@@ -219,8 +221,8 @@ for (j in 1:nrow(bVals)){
 
 t_test_res = data.frame(cbind(p.value=t_test_res, CpG_Site))
 t_test_res_FDR = t_test_res %>%
-  mutate(FDR_P_Value = p.adjust(t_test_res$p.value,method="fdr"))
-## End of tests here, can u check if the previous part is correct?
+  mutate(FDR_P_Value = p.adjust(t_test_res$p.value,method="fdr"),
+         FWER_P_Value = p.adjust(t_test_res$p.value, method="bonferroni"))
 ```
 
 ## Results:
@@ -238,7 +240,7 @@ colnames(chrom_info)[3] = "probeID"
 t_test_FDR_w_chrom = merge(paired_t_test_res_FDR,chrom_info,by.x="CpG_Site",by.y="probeID")
 
 colnames(t_test_FDR_w_chrom) = c("CpG_Site","p.value","FDR_P_Value",
-                                 "chrom","pos")
+                                 "FWER_P_Value","chrom","pos")
 
 t_test_FDR_w_chrom$FDR_P_Value = -log10(t_test_FDR_w_chrom$FDR_P_Value)
 
@@ -278,6 +280,59 @@ ggplot(plot, aes(x=pos_cum, y=FDR_P_Value)) +
 
 From this manhattan plot of the paired t-test results we can see that 
 
+### Manhattan Plot of FWER Corrected P-Values from Paired T Test:
+
+```{r}
+chrom_info = data.frame(rowRanges(GRSets_norm_filter))%>%
+  dplyr::select("seqnames","start")
+
+chrom_info = cbind(chrom_info,GRSets_norm_filter@rowRanges@ranges@NAMES)
+
+colnames(chrom_info)[3] = "probeID"
+
+t_test_FDR_w_chrom = merge(paired_t_test_res_FDR,chrom_info,by.x="CpG_Site",by.y="probeID")
+
+colnames(t_test_FDR_w_chrom) = c("CpG_Site","p.value","FDR_P_Value",
+                                 "FWER_P_Value","chrom","pos")
+
+t_test_FDR_w_chrom$FWER_P_Value = -log10(t_test_FDR_w_chrom$FWER_P_Value)
+
+t_test_FDR_w_chrom$chrom = gsub("chr","",t_test_FDR_w_chrom$chrom)
+
+t_test_FDR_w_chrom$chrom = recode(t_test_FDR_w_chrom$chrom,"X" = "23","Y"="24","NA"="25")
+
+t_test_FDR_w_chrom$chrom = as.numeric(t_test_FDR_w_chrom$chrom)
+
+plot <- t_test_FDR_w_chrom %>% 
+  dplyr::group_by(chrom) %>% 
+  dplyr::summarise(chr_len=max(pos)) %>% 
+  dplyr::mutate(tot=cumsum(as.numeric(chr_len))-chr_len) %>%
+  dplyr::select(-chr_len) %>%
+  dplyr::left_join(t_test_FDR_w_chrom, ., by=c("chrom"="chrom")) %>%
+  dplyr::arrange(chrom,pos) %>%
+  dplyr::mutate(pos_cum=pos+tot)
+
+axisdf = plot %>% dplyr::group_by(chrom) %>% dplyr::summarize(center=( max(pos_cum) + min(pos_cum) ) / 2 )
+
+
+ggplot(plot, aes(x=pos_cum, y=FWER_P_Value)) +
+    geom_point( aes(color=as.factor(chrom)), alpha=0.8, size=1.3) +
+    scale_color_manual(values = rep(c("grey", "skyblue"),22))+
+    scale_x_continuous( label = axisdf$chrom[seq(1, length(axisdf$chrom), by = 2)], breaks= axisdf$center[seq(1, length(axisdf$center), by = 2)] ) +
+    scale_y_continuous(expand = c(0, 0) ) +
+    theme_bw() +
+    theme( 
+      legend.position="none",
+      panel.border = element_blank(),
+      panel.grid.major.x = element_blank(),
+      panel.grid.minor.x = element_blank()
+    )+
+  xlab("Chromosome")+
+  ylab("-log10(FWER Corrected P-value)")
+```
+
+
+
 ### Manhattan Plot of FDR Corrected P-Values from Independent T Test:
 
 ```{r}
@@ -291,7 +346,7 @@ colnames(chrom_info)[3] = "probeID"
 t_test_FDR_w_chrom = merge(t_test_res_FDR,chrom_info,by.x="CpG_Site",by.y="probeID")
 
 colnames(t_test_FDR_w_chrom) = c("CpG_Site","p.value","FDR_P_Value",
-                                 "chrom","pos")
+                                 "FWER_P_Value","chrom","pos")
 
 t_test_FDR_w_chrom$FDR_P_Value = -log10(t_test_FDR_w_chrom$FDR_P_Value)
 
@@ -302,15 +357,15 @@ t_test_FDR_w_chrom$chrom = recode(t_test_FDR_w_chrom$chrom,"X" = "23","Y"="24","
 t_test_FDR_w_chrom$chrom = as.numeric(t_test_FDR_w_chrom$chrom)
 
 plot <- t_test_FDR_w_chrom %>% 
-  group_by(chrom) %>% 
-  summarise(chr_len=max(pos)) %>% 
-  mutate(tot=cumsum(as.numeric(chr_len))-chr_len) %>%
+  dplyr::group_by(chrom) %>% 
+  dplyr::summarise(chr_len=max(pos)) %>% 
+  dplyr::mutate(tot=cumsum(as.numeric(chr_len))-chr_len) %>%
   dplyr::select(-chr_len) %>%
-  left_join(t_test_FDR_w_chrom, ., by=c("chrom"="chrom")) %>%
-  arrange(chrom,pos) %>%
-  mutate(pos_cum=pos+tot)
+  dplyr::left_join(t_test_FDR_w_chrom, ., by=c("chrom"="chrom")) %>%
+  dplyr::arrange(chrom,pos) %>%
+  dplyr::mutate(pos_cum=pos+tot)
 
-axisdf = plot %>% group_by(chrom) %>% summarize(center=( max(pos_cum) + min(pos_cum) ) / 2 )
+axisdf = plot %>% dplyr::group_by(chrom) %>% dplyr::summarize(center=( max(pos_cum) + min(pos_cum) ) / 2 )
 
 axisdf$chrom = c(seq(1,22))
 
@@ -328,6 +383,58 @@ ggplot(plot, aes(x=pos_cum, y=FDR_P_Value)) +
     )+
   xlab("Chromosome")+
   ylab("-log10(FDR Corrected P-value)")
+```
+
+### Manhattan Plot of FWER Corrected P-Values from Independent T Test:
+
+```{r}
+chrom_info = data.frame(rowRanges(GRSets_norm_filter))%>%
+  dplyr::select("seqnames","start")
+
+chrom_info = cbind(chrom_info,GRSets_norm_filter@rowRanges@ranges@NAMES)
+
+colnames(chrom_info)[3] = "probeID"
+
+t_test_FDR_w_chrom = merge(t_test_res_FDR,chrom_info,by.x="CpG_Site",by.y="probeID")
+
+colnames(t_test_FDR_w_chrom) = c("CpG_Site","p.value","FDR_P_Value",
+                                 "FWER_P_Value","chrom","pos")
+
+t_test_FDR_w_chrom$FWER_P_Value = -log10(t_test_FDR_w_chrom$FWER_P_Value)
+
+t_test_FDR_w_chrom$chrom = gsub("chr","",t_test_FDR_w_chrom$chrom)
+
+t_test_FDR_w_chrom$chrom = recode(t_test_FDR_w_chrom$chrom,"X" = "23","Y"="24","NA"="25")
+
+t_test_FDR_w_chrom$chrom = as.numeric(t_test_FDR_w_chrom$chrom)
+
+plot <- t_test_FDR_w_chrom %>% 
+  dplyr::group_by(chrom) %>% 
+  dplyr::summarise(chr_len=max(pos)) %>% 
+  dplyr::mutate(tot=cumsum(as.numeric(chr_len))-chr_len) %>%
+  dplyr::select(-chr_len) %>%
+  dplyr::left_join(t_test_FDR_w_chrom, ., by=c("chrom"="chrom")) %>%
+  dplyr::arrange(chrom,pos) %>%
+  dplyr::mutate(pos_cum=pos+tot)
+
+axisdf = plot %>% dplyr::group_by(chrom) %>% dplyr::summarize(center=( max(pos_cum) + min(pos_cum) ) / 2 )
+
+axisdf$chrom = c(seq(1,22))
+
+ggplot(plot, aes(x=pos_cum, y=FWER_P_Value)) +
+    geom_point( aes(color=as.factor(chrom)), alpha=0.8, size=1.3) +
+    scale_color_manual(values = rep(c("grey", "skyblue"),22))+
+    scale_x_continuous( label = axisdf$chrom[seq(1, length(axisdf$chrom), by = 2)], breaks= axisdf$center[seq(1, length(axisdf$center), by = 2)] ) +
+    scale_y_continuous(expand = c(0, 0) ) +
+    theme_bw() +
+    theme( 
+      legend.position="none",
+      panel.border = element_blank(),
+      panel.grid.major.x = element_blank(),
+      panel.grid.minor.x = element_blank()
+    )+
+  xlab("Chromosome")+
+  ylab("-log10(FWER Corrected P-value)")
 ```
 
 ### Volcano Plot to pinpoint DMR's (Paired Samples):
@@ -387,6 +494,19 @@ ggplot(diff_mean_Idep, aes(x=diff_mean, y=-log10(FDR_P_Value),col=diffexpressed)
 ```
 
 ### Overlap between Paired and Independent Tests:
+```{r}
+# FDR
+sig_paired_FDR <- paired_t_test_res_FDR$CpG_Site[paired_t_test_res_FDR$FDR_P_Value < 0.05]
+sig_ind_FDR <- t_test_res_FDR$CpG_Site[t_test_res_FDR$FDR_P_Value < 0.05]
+overlap_FDR <- intersect(sig_paired_FDR, sig_ind_FDR)
+nonoverlap_FDR <- c(sig_paired_FDR[!(sig_paired_FDR %in% overlap_FDR)], sig_ind_FDR[!(sig_ind_FDR %in% overlap_FDR)])
+
+# FWER
+sig_paired_FWER <- paired_t_test_res_FDR$CpG_Site[paired_t_test_res_FDR$FWER_P_Value < 0.05]
+sig_ind_FWER <- t_test_res_FDR$CpG_Site[t_test_res_FDR$FWER_P_Value < 0.05]
+overlap_FWER <- intersect(sig_paired_FWER, sig_ind_FWER)
+nonoverlap_FWER <- c(sig_paired_FWER[!(sig_paired_FWER %in% overlap_FWER)], sig_ind_FWER[!(sig_ind_FWER %in% overlap_FWER)])
+```
 
 
 ## Discussion and Conclusions:
