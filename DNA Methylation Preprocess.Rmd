@@ -1,0 +1,132 @@
+---
+title: "DNA Methylation Preprocess"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(TCGAbiolinks)
+library(tidyverse)
+library(minfi)
+# library(IlluminaHumanMethylation450kmanifest)
+# library(IlluminaHumanMethylation450kanno.ilmn12.hg19)
+```
+
+# Query 
+```{r}
+# Query raw methylation 450K array from TCGA
+query <- GDCquery(project = "TCGA-KIRC",
+                      data.category = "Raw microarray data",
+                      data.type = "Raw intensities", 
+                      experimental.strategy = "Methylation array", 
+                      legacy = TRUE,
+                      file.type = ".idat",
+                      platform = "Illumina Human Methylation 450")
+clinical <- GDCquery_clinic(project = "TCGA-KIRC")
+
+# Download IDAT files from TCGA
+tryCatch(GDCdownload(query, method = "api", files.per.chunk = 20),
+             error = function(e) GDCdownload(query, method = "client"))
+
+# Move to current work dir
+for(file in dir(".",pattern = ".idat", recursive = T)){
+  TCGAbiolinks:::move(file,basename(file))
+}
+```
+
+# Preprocess
+Reference: 
+https://bioconductor.org/help/course-materials/2014/BioC2014/minfi_BioC2014.pdf
+https://www.ncbi.nlm.nih.gov/pmc/articles/PMC4916993/
+https://www.nature.com/articles/bjc2013496
+https://www.ncbi.nlm.nih.gov/pmc/articles/PMC5302158/
+https://www.ncbi.nlm.nih.gov/pmc/articles/PMC3592906/
+```{r}
+# Reformat to a target data frame
+results <- getResults(query) %>%
+  group_by(cases) %>%
+  mutate(Basename=substr(file_name, 1, 17)) %>%
+  dplyr::select(cases, state, sample_type, cases.submitter_id, sample.submitter_id, Basename) %>% unique() %>%
+  left_join(clinical %>%
+              select(submitter_id, gender),
+            by=c("cases.submitter_id"="submitter_id"))
+results$sample_type[results$sample_type=="Additional - New Primary"] <- "Primary Tumor"
+
+# rm(query)
+  
+# Read raw data
+RGSets <- read.metharray.exp(targets=results)
+manifest <- minfi::getManifest(RGSets)
+manifest
+head(getProbeInfo(manifest))
+# rm(RGSets)
+
+# Quality Control for Samples
+MSets <- preprocessRaw(RGSets)
+qc <- getQC(MSets)
+head(qc)
+plotQC(qc)
+rm(MSets)
+
+detP <- detectionP(RGSets)
+detP[1:5,1:5]
+keep <- colMeans(detP) < 0.01 # Remove sample with detection p-value > 0.01
+table(keep) # No one is removed
+
+# The 402nd sample seems to be bad from the QCplot, remove it
+RGSets <- RGSets[,-402]
+results <- results[-402,]
+detP <- detP[,-402]
+
+# Normalization (preprocessFunnorm: useful for can studies)
+GRSets_norm <- preprocessFunnorm(RGSets)
+plotSex(GRSets_norm)
+# Some predicted sexes are wrong
+GRSets_norm@colData$gender[GRSets_norm@colData$gender=="female"] <- "F"
+GRSets_norm@colData$gender[GRSets_norm@colData$gender=="male"] <- "M"
+GRSets_norm@colData$predictedSex <- GRSets_norm@colData$gender
+plotSex(GRSets_norm)
+
+
+# Beta densities for unnormalized & normalized data
+par(mfrow=c(1,2))
+densityPlot(RGSets, sampGroups = results$sample_type, main="Raw", legend=F)
+legend("top", legend = levels(factor(results$sample_type)),
+       text.col=RColorBrewer::brewer.pal(8,"Dark2"), cex = 0.6)
+densityPlot(getBeta(GRSets_norm), sampGroups = results$sample_type, main="Normalized", legend=F)
+legend("top", legend = levels(factor(results$sample_type)),
+       text.col=RColorBrewer::brewer.pal(8,"Dark2"), cex = 0.6)
+
+# Quality Control for probes
+detP <- detP[match(featureNames(GRSets_norm),rownames(detP)),] # Ensure probes are in the same order
+keep <- rowSums(detP < 0.01) == ncol(GRSets_norm) # Remove probes with one or more detection p-value > 0.01
+table(keep)
+GRSets_norm_filter <- GRSets_norm[keep,]
+
+ann450k <-  getAnnotation(IlluminaHumanMethylation450kanno.ilmn12.hg19)
+keep <- !(featureNames(GRSets_norm_filter) %in% 
+            ann450k$Name[ann450k$chr %in% c("chrX", "chrY")])
+table(keep) 
+GRSets_norm_filter <- GRSets_norm_filter[keep,] # Remove probes on the sex chromosomes
+
+GRSets_norm_filter <- dropLociWithSnps(GRSets_norm_filter) # Remove probes with SNPs at CpG sites
+
+xReactiveProbes <- read.csv("48639-non-specific-probes-Illumina450k.csv")
+keep <- !(featureNames(GRSets_norm_filter) %in% xReactiveProbes$TargetID)
+table(keep)
+GRSets_norm_filter <- GRSets_norm_filter[keep,] # Remove cross reactive probes
+
+# Get M values and beta values
+mVals <- getM(GRSets_norm_filter)
+bVals <- getBeta(GRSets_norm_filter)
+par(mfrow=c(1,2))
+densityPlot(mVals, sampGroups=results$sample_type, main="M values", xlab="M values", legend=F)
+legend("topleft", legend = levels(factor(results$sample_type)),
+       text.col=RColorBrewer::brewer.pal(8,"Dark2"), cex = 0.6)
+densityPlot(bVals, sampGroups=results$sample_type, main="Beta values", xlab="Beta values", legend=F)
+legend("top", legend = levels(factor(results$sample_type)),
+       text.col=RColorBrewer::brewer.pal(8,"Dark2"), cex = 0.6)
+
+annotations <- getAnnotation(GRSets_norm_filter)
+```
